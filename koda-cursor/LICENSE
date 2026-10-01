@@ -1,0 +1,48 @@
+KODA — Proprietary Software License
+Copyright (c) 2026 HYNAWEB. All rights reserved.
+
+This software and its associated source code, documentation, designs, and
+assets (the "Software") are the exclusive property of HYNAWEB and its
+founder, Harun.
+
+1. NO LICENSE GRANTED
+   No part of the Software may be copied, modified, merged, published,
+   distributed, sublicensed, sold, rented, leased, or otherwise transferred
+   in any form, by any means, without prior written permission from HYNAWEB.
+
+2. LIMITED END-USER GRANT
+   You are permitted to install and use the compiled extension for personal
+   or internal business purposes. This grant does not extend to:
+     a. Redistribution, resale, or bundling with other products.
+     b. Modification, translation, or creation of derivative works.
+     c. Reverse engineering, decompilation, or disassembly.
+     d. Removing or altering any copyright, trademark, or attribution.
+     e. Hosting the Software or its backend on third-party infrastructure
+        without written agreement.
+
+3. THIRD-PARTY SERVICES
+   The Software communicates with backend services operated by HYNAWEB
+   (Cloudflare Workers, Supabase) and third-party APIs (Groq, Tavily).
+   Use of those services is subject to their respective terms.
+
+4. TRADEMARKS
+   "KODA" and "HYNAWEB" are trademarks of Harun / HYNAWEB. No license is
+   granted to use these marks without written permission.
+
+5. NO WARRANTY
+   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
+   OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+   FITNESS FOR A PARTICULAR PURPOSE, AND NONINFRINGEMENT. IN NO EVENT SHALL
+   HYNAWEB OR ITS FOUNDER BE LIABLE FOR ANY CLAIM, DAMAGES, OR OTHER
+   LIABILITY ARISING FROM THE USE OF THE SOFTWARE.
+
+6. TERMINATION
+   Any violation of this license immediately terminates your rights under
+   it. HYNAWEB reserves the right to modify or revoke access at any time.
+
+7. GOVERNING LAW
+   This license is governed by the laws of India, without regard to conflict
+   of law provisions.
+
+For licensing, partnership, or commercial use inquiries:
+contact@hynaweb.com (replace with your actual contact)

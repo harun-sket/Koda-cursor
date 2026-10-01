@@ -1,0 +1,53 @@
+{
+  "name": "koda-cursor",
+  "displayName": "KODA — AI Code Editor",
+  "description": "Cursor-style AI coding inside VS Code. By Harun / HYNAWEB.",
+  "version": "0.1.0",
+  "publisher": "hynaweb",
+  "engines": { "vscode": "^1.85.0" },
+  "categories": ["Programming Languages", "Other", "Education"],
+  "activationEvents": [],
+  "main": "./extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        { "id": "koda-sidebar", "title": "KODA", "icon": "media/icon.svg" }
+      ]
+    },
+    "views": {
+      "koda-sidebar": [
+        { "id": "koda.chatView", "name": "Chat", "type": "webview" }
+      ]
+    },
+    "commands": [
+      { "command": "koda.openChat", "title": "KODA: Open Chat" },
+      { "command": "koda.inlineEdit", "title": "KODA: Inline Edit" },
+      { "command": "koda.explainSelection", "title": "KODA: Explain Selection" },
+      { "command": "koda.clearChat", "title": "KODA: Clear Chat" }
+    ],
+    "keybindings": [
+      { "command": "koda.inlineEdit", "key": "ctrl+alt+i", "mac": "cmd+alt+i", "when": "editorTextFocus" },
+      { "command": "koda.openChat", "key": "ctrl+alt+l", "mac": "cmd+alt+l" },
+      { "command": "koda.explainSelection", "key": "ctrl+alt+k", "mac": "cmd+alt+k", "when": "editorHasSelection" }
+    ],
+    "menus": {
+      "editor/context": [
+        { "command": "koda.inlineEdit", "group": "koda@1" },
+        { "command": "koda.explainSelection", "when": "editorHasSelection", "group": "koda@2" }
+      ]
+    },
+    "configuration": {
+      "title": "KODA",
+      "properties": {
+        "koda.workerUrl": {
+          "type": "string",
+          "default": "https://koda-api-proxy.harun9842245.workers.dev",
+          "description": "KODA Cloudflare Worker URL (no trailing slash)."
+        },
+        "koda.autoApply": { "type": "boolean", "default": false, "description": "Auto-apply edits from chat." },
+        "koda.maxContextFiles": { "type": "number", "default": 6, "description": "How many open files to attach as context." },
+        "koda.webSearchByDefault": { "type": "boolean", "default": false, "description": "Enable web search on every chat message." }
+      }
+    }
+  }
+}
