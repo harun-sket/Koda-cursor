@@ -2,13 +2,13 @@
   "name": "koda-cursor",
   "displayName": "KODA — AI Code Editor",
   "description": "Cursor-style AI coding inside VS Code. By Harun / HYNAWEB.",
-  "version": "0.2.0",
-  "repository": { "type": "git", "url": "https://github.com/harun-sket/Koda-cursor.git" },
+  "version": "0.3.0",
   "publisher": "hynaweb",
   "engines": { "vscode": "^1.85.0" },
   "categories": ["Programming Languages", "Other", "Education"],
   "activationEvents": [],
   "main": "./extension.js",
+  "repository": { "type": "git", "url": "https://github.com/harun-sket/Koda-cursor.git" },
   "contributes": {
     "viewsContainers": {
       "activitybar": [
@@ -22,9 +22,11 @@
     },
     "commands": [
       { "command": "koda.openChat", "title": "KODA: Open Chat" },
+      { "command": "koda.newChat", "title": "KODA: New Chat" },
       { "command": "koda.inlineEdit", "title": "KODA: Inline Edit" },
       { "command": "koda.explainSelection", "title": "KODA: Explain Selection" },
-      { "command": "koda.clearChat", "title": "KODA: Clear Chat" }
+      { "command": "koda.clearChat", "title": "KODA: Clear Chat" },
+      { "command": "koda.runAction", "title": "KODA: Run Action" }
     ],
     "keybindings": [
       { "command": "koda.inlineEdit", "key": "ctrl+alt+i", "mac": "cmd+alt+i", "when": "editorTextFocus" },

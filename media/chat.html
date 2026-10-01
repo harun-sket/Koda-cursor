@@ -22,7 +22,7 @@
   }
   * { margin: 0; padding: 0; box-sizing: border-box; }
   html, body { height: 100%; font-family: var(--vscode-font-family, system-ui); font-size: var(--vscode-font-size, 13px); color: var(--fg); background: var(--bg); overflow: hidden; }
-  body { display: flex; flex-direction: column; }
+  body { display: flex; flex-direction: column; position: relative; }
   header { display: flex; align-items: center; gap: 6px; padding: 8px 10px; border-bottom: 1px solid var(--bd); background: var(--panel); flex-shrink: 0; }
   .logo { font-weight: 800; color: var(--acc); letter-spacing: .5px; }
   .spacer { flex: 1; }
@@ -97,14 +97,31 @@
   .slash-item:hover, .slash-item.active { background: var(--hover); }
   .slash-item .cmd { color: var(--acc); font-weight: 700; }
   .slash-item .desc { color: var(--mut); }
+  .overlay { position: absolute; inset: 0; background: rgba(0,0,0,0.45); display: none; z-index: 100; }
+  .overlay.on { display: block; }
+  .drawer { position: absolute; top: 0; right: 0; bottom: 0; width: 82%; background: var(--panel); border-left: 1px solid var(--bd); transform: translateX(100%); transition: transform .2s ease; z-index: 101; display: flex; flex-direction: column; }
+  .drawer.on { transform: translateX(0); }
+  .drawer-head { padding: 10px; border-bottom: 1px solid var(--bd); display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+  .drawer-title { font-weight: 700; font-size: 12px; }
+  .drawer-new { background: var(--btn); color: var(--btn-fg); border: none; border-radius: 4px; padding: 4px 10px; font-size: 11px; cursor: pointer; font-family: inherit; }
+  .drawer-new:hover { filter: brightness(1.15); }
+  .drawer-list { flex: 1; overflow-y: auto; padding: 6px; }
+  .conv-row { display: flex; align-items: center; gap: 6px; padding: 8px 10px; border-radius: 5px; cursor: pointer; font-size: 12px; color: var(--fg); }
+  .conv-row:hover { background: var(--hover); }
+  .conv-row.on { background: var(--hover); border-left: 2px solid var(--acc); }
+  .conv-title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .conv-del { color: var(--mut); padding: 0 4px; cursor: pointer; font-size: 14px; line-height: 1; }
+  .conv-del:hover { color: var(--err); }
+  .conv-empty { color: var(--mut); text-align: center; padding: 20px; font-size: 11px; }
 </style>
 </head>
 <body>
 <header>
   <span class="logo">KODA</span>
   <span class="spacer"></span>
+  <button class="ic-btn" id="chatsBtn" title="Conversations">Chats</button>
   <button class="ic-btn" id="webBtn" title="Toggle web search">Web</button>
-  <button class="ic-btn" id="clearBtn" title="Clear chat">Clear</button>
+  <button class="ic-btn" id="clearBtn" title="Clear current">Clear</button>
 </header>
 <div id="msgs">
   <div class="welcome">
@@ -125,29 +142,30 @@
     <button class="stop-btn" id="stopBtn" title="Stop">STOP</button>
   </div>
 </footer>
+<div class="overlay" id="overlay"></div>
+<div class="drawer" id="drawer">
+  <div class="drawer-head">
+    <span class="drawer-title">Conversations</span>
+    <button class="drawer-new" id="drawerNew">+ New</button>
+  </div>
+  <div class="drawer-list" id="drawerList"></div>
+</div>
 <script nonce="{{NONCE}}">
 const vscode = acquireVsCodeApi();
 const $ = id => document.getElementById(id);
-const msgsEl = $('msgs'), inEl = $('in'), sendBtn = $('sendBtn');
+const msgsEl = $('msgs'), inEl = $('in'), sendBtn = $('sendBtn'), stopBtn = $('stopBtn');
 const webBtn = $('webBtn'), clearBtn = $('clearBtn'), chipsEl = $('chips');
-const acEl = $('ac');
-const stopBtn = $('stopBtn');
-const slashMenu = $('slashMenu');
+const acEl = $('ac'), slashMenu = $('slashMenu');
+const chatsBtn = $('chatsBtn'), drawer = $('drawer'), overlay = $('overlay'), drawerList = $('drawerList'), drawerNew = $('drawerNew');
 
-let state = vscode.getState() || { messages: [], webSearch: {{WEBSEARCH_DEFAULT}}, mentions: [], pendingSelection: null };
-if (!Array.isArray(state.messages)) state.messages = [];
-if (!Array.isArray(state.mentions)) state.mentions = [];
-
+let state = { messages: [], webSearch: {{WEBSEARCH_DEFAULT}}, mentions: [], pendingSelection: null };
+let conversations = [];
+let currentId = null;
 let isSending = false;
 let fileList = [];
-let acIndex = 0;
-let acMode = null;
-let streamEl = null;
-let streamRaw = '';
-let slashActive = false;
-let slashIndex = 0;
-
-function saveState() { vscode.setState(state); }
+let acIndex = 0, acMode = null;
+let streamEl = null, streamRaw = '';
+let slashActive = false, slashIndex = 0;
 
 function escapeHtml(s) {
   return String(s == null ? '' : s)
@@ -216,7 +234,6 @@ function renderMessages() {
 
     if (m.role === 'assistant') {
       div.innerHTML = renderMarkdown(m.content);
-
       if (Array.isArray(m.edits) && m.edits.length) {
         m.edits.forEach(e => {
           const card = document.createElement('div');
@@ -239,7 +256,6 @@ function renderMessages() {
           card.appendChild(head);
           div.appendChild(card);
         });
-
         const applyAll = document.createElement('button');
         applyAll.style.cssText = 'display:inline-flex;margin-top:6px;background:var(--btn);color:var(--btn-fg);border:none;border-radius:4px;padding:4px 10px;font-size:11px;cursor:pointer;font-family:inherit';
         applyAll.textContent = 'Apply all ' + m.edits.length + ' file(s)';
@@ -250,7 +266,6 @@ function renderMessages() {
         };
         div.appendChild(applyAll);
       }
-
       if (Array.isArray(m.sources) && m.sources.length) {
         const box = document.createElement('div');
         box.className = 'sources';
@@ -266,7 +281,6 @@ function renderMessages() {
         });
         div.appendChild(box);
       }
-
       div.querySelectorAll('pre').forEach(pre => {
         const btn = document.createElement('button');
         btn.className = 'copy-code';
@@ -315,7 +329,7 @@ function renderChips() {
     c.innerHTML = '<span class="label">@' + escapeHtml(m.path) + '</span>';
     const x = document.createElement('span');
     x.className = 'x'; x.textContent = '\u2715';
-    x.onclick = () => { state.mentions.splice(i, 1); saveState(); renderChips(); };
+    x.onclick = () => { state.mentions.splice(i, 1); renderChips(); };
     c.appendChild(x);
     chipsEl.appendChild(c);
   });
@@ -325,7 +339,7 @@ function renderChips() {
     c.innerHTML = '<span>#' + escapeHtml(state.pendingSelection.path) + ':' + state.pendingSelection.startLine + '-' + state.pendingSelection.endLine + '</span>';
     const x = document.createElement('span');
     x.className = 'x'; x.textContent = '\u2715';
-    x.onclick = () => { state.pendingSelection = null; saveState(); renderChips(); };
+    x.onclick = () => { state.pendingSelection = null; renderChips(); };
     c.appendChild(x);
     chipsEl.appendChild(c);
   }
@@ -336,8 +350,7 @@ function send(text) {
   isSending = true;
   sendBtn.disabled = true;
   stopBtn.classList.add('on');
-  streamEl = null;
-  streamRaw = '';
+  streamEl = null; streamRaw = '';
 
   let fullText = text.trim();
   if (state.pendingSelection) {
@@ -359,23 +372,14 @@ function send(text) {
 
   const mentions = state.mentions.map(m => m.path);
 
-  vscode.postMessage({
-    type: 'ask',
-    message: fullText,
-    mentions,
-    webSearch: !!state.webSearch
-  });
+  vscode.postMessage({ type: 'ask', message: fullText, mentions, webSearch: !!state.webSearch });
 
   state.pendingSelection = null;
-  saveState();
   renderChips();
 }
 
 sendBtn.onclick = () => send(inEl.value);
-stopBtn.onclick = () => {
-  vscode.postMessage({ type: 'stop' });
-  stopBtn.classList.remove('on');
-};
+stopBtn.onclick = () => { vscode.postMessage({ type: 'stop' }); stopBtn.classList.remove('on'); };
 
 inEl.addEventListener('keydown', e => {
   if (slashActive && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
@@ -385,12 +389,7 @@ inEl.addEventListener('keydown', e => {
     items.forEach((it, i) => it.classList.toggle('active', i === slashIndex));
     return;
   }
-  if (slashActive && e.key === 'Enter') {
-    e.preventDefault();
-    const active = slashMenu.querySelector('.slash-item.active');
-    if (active) active.click();
-    return;
-  }
+  if (slashActive && e.key === 'Enter') { e.preventDefault(); const a = slashMenu.querySelector('.slash-item.active'); if (a) a.click(); return; }
   if (slashActive && e.key === 'Escape') { closeSlash(); return; }
   if (acMode && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
     e.preventDefault();
@@ -400,17 +399,9 @@ inEl.addEventListener('keydown', e => {
     items.forEach((it, i) => it.classList.toggle('active', i === acIndex));
     return;
   }
-  if (acMode && e.key === 'Enter') {
-    e.preventDefault();
-    const active = acEl.querySelector('.ac-item.active');
-    if (active) active.click();
-    return;
-  }
+  if (acMode && e.key === 'Enter') { e.preventDefault(); const a = acEl.querySelector('.ac-item.active'); if (a) a.click(); return; }
   if (acMode && e.key === 'Escape') { closeAc(); return; }
-  if (e.key === 'Enter' && !e.shiftKey && !acMode && !slashActive) {
-    e.preventDefault();
-    sendBtn.click();
-  }
+  if (e.key === 'Enter' && !e.shiftKey && !acMode && !slashActive) { e.preventDefault(); sendBtn.click(); }
 });
 
 inEl.addEventListener('input', () => {
@@ -430,14 +421,12 @@ const SLASH_CMDS = [
 ];
 
 function checkSlashMenu() {
-  const val = inEl.value;
-  const match = val.match(/^\/(\w*)$/);
+  const match = inEl.value.match(/^\/(\w*)$/);
   if (!match) { closeSlash(); return; }
   const q = match[1].toLowerCase();
   const items = SLASH_CMDS.filter(c => c.cmd.slice(1).startsWith(q));
   if (!items.length) { closeSlash(); return; }
-  slashActive = true;
-  slashIndex = 0;
+  slashActive = true; slashIndex = 0;
   slashMenu.innerHTML = '';
   items.forEach((it, i) => {
     const el = document.createElement('div');
@@ -449,16 +438,10 @@ function checkSlashMenu() {
   slashMenu.classList.add('on');
 }
 
-function closeSlash() {
-  slashActive = false;
-  slashMenu.classList.remove('on');
-  slashMenu.innerHTML = '';
-}
+function closeSlash() { slashActive = false; slashMenu.classList.remove('on'); slashMenu.innerHTML = ''; }
 
 function checkAutocomplete() {
-  const val = inEl.value;
-  const pos = inEl.selectionStart;
-  const before = val.slice(0, pos);
+  const val = inEl.value, pos = inEl.selectionStart, before = val.slice(0, pos);
   const atMatch = before.match(/@([^\s]*)$/);
   const hashMatch = before.match(/#([^\s]*)$/);
   if (atMatch) { openFileAc(atMatch[1]); return; }
@@ -469,14 +452,8 @@ function checkAutocomplete() {
 function openFileAc(query) {
   if (!fileList.length) vscode.postMessage({ type: 'getFiles', limit: 300 });
   const q = query.toLowerCase();
-  if ('problems'.startsWith(q)) {
-    renderAc([{ label: 'problems', type: 'diag' }], 'file');
-    return;
-  }
-  if ('git'.startsWith(q)) {
-    renderAc([{ label: 'git', type: 'vcs' }], 'file');
-    return;
-  }
+  if ('problems'.startsWith(q)) { renderAc([{ label: 'problems', type: 'diag' }], 'file'); return; }
+  if ('git'.startsWith(q)) { renderAc([{ label: 'git', type: 'vcs' }], 'file'); return; }
   const matches = fileList.filter(f => f.toLowerCase().includes(q)).slice(0, 20);
   renderAc(matches.map(f => ({ label: f, type: 'file' })), 'file');
 }
@@ -489,8 +466,7 @@ function openSelectionAc() {
 }
 
 function renderAc(items, mode) {
-  acMode = mode;
-  acIndex = 0;
+  acMode = mode; acIndex = 0;
   if (!items.length) { closeAc(); return; }
   acEl.innerHTML = '';
   items.forEach((it, i) => {
@@ -499,16 +475,11 @@ function renderAc(items, mode) {
     div.innerHTML = '<span>' + escapeHtml(it.label) + '</span><span class="type">' + escapeHtml(it.type || '') + '</span>';
     div.onclick = () => {
       if (mode === 'file') {
-        const val = inEl.value;
-        const pos = inEl.selectionStart;
+        const val = inEl.value, pos = inEl.selectionStart;
         const before = val.slice(0, pos).replace(/@[^\s]*$/, '');
         const after = val.slice(pos);
         inEl.value = before + after;
-        if (!state.mentions.find(x => x.path === it.label)) {
-          state.mentions.push({ path: it.label });
-          saveState();
-          renderChips();
-        }
+        if (!state.mentions.find(x => x.path === it.label)) { state.mentions.push({ path: it.label }); renderChips(); }
       }
       closeAc();
       inEl.focus();
@@ -518,11 +489,7 @@ function renderAc(items, mode) {
   acEl.classList.add('on');
 }
 
-function closeAc() {
-  acMode = null;
-  acEl.classList.remove('on');
-  acEl.innerHTML = '';
-}
+function closeAc() { acMode = null; acEl.classList.remove('on'); acEl.innerHTML = ''; }
 
 function regenerate(idx) {
   let ui = idx - 1;
@@ -530,7 +497,7 @@ function regenerate(idx) {
   if (ui < 0) return;
   const text = state.messages[ui].content;
   state.messages = state.messages.slice(0, ui);
-  renderMessages(); saveState();
+  renderMessages();
   send(text);
 }
 
@@ -540,24 +507,61 @@ function editMessage(idx) {
   inEl.value = m.content;
   inEl.focus();
   state.messages = state.messages.slice(0, idx);
-  renderMessages(); saveState();
+  renderMessages();
 }
 
-webBtn.onclick = () => {
-  state.webSearch = !state.webSearch;
-  webBtn.classList.toggle('on', state.webSearch);
-  saveState();
-};
-webBtn.classList.toggle('on', state.webSearch);
+function renderDrawer() {
+  drawerList.innerHTML = '';
+  if (!conversations.length) {
+    drawerList.innerHTML = '<div class="conv-empty">No conversations yet</div>';
+    return;
+  }
+  conversations.forEach(c => {
+    const row = document.createElement('div');
+    row.className = 'conv-row' + (c.id === currentId ? ' on' : '');
+    const title = document.createElement('span');
+    title.className = 'conv-title';
+    title.textContent = c.title || 'New Chat';
+    const del = document.createElement('span');
+    del.className = 'conv-del';
+    del.textContent = '\u2715';
+    del.onclick = (e) => { e.stopPropagation(); vscode.postMessage({ type: 'deleteConversation', id: c.id }); };
+    row.appendChild(title);
+    row.appendChild(del);
+    row.onclick = () => { vscode.postMessage({ type: 'selectConversation', id: c.id }); closeDrawer(); };
+    drawerList.appendChild(row);
+  });
+}
 
-clearBtn.onclick = () => {
-  state.messages = [];
-  renderMessages(); saveState();
-};
+function openDrawer() { drawer.classList.add('on'); overlay.classList.add('on'); renderDrawer(); }
+function closeDrawer() { drawer.classList.remove('on'); overlay.classList.remove('on'); }
+
+chatsBtn.onclick = openDrawer;
+overlay.onclick = closeDrawer;
+drawerNew.onclick = () => { vscode.postMessage({ type: 'newChat' }); closeDrawer(); };
+
+webBtn.onclick = () => { state.webSearch = !state.webSearch; webBtn.classList.toggle('on', state.webSearch); };
+webBtn.classList.toggle('on', state.webSearch);
+clearBtn.onclick = () => vscode.postMessage({ type: 'clearCurrent' });
 
 window.addEventListener('message', e => {
   const msg = e.data;
   if (!msg || !msg.type) return;
+
+  if (msg.type === 'loadConversation') {
+    currentId = msg.id;
+    state.messages = Array.isArray(msg.messages) ? msg.messages.slice() : [];
+    renderMessages();
+    renderDrawer();
+    return;
+  }
+
+  if (msg.type === 'conversationsList') {
+    conversations = msg.conversations || [];
+    currentId = msg.currentId;
+    renderDrawer();
+    return;
+  }
 
   if (msg.type === 'chunk') {
     const th = document.getElementById('thinking');
@@ -584,7 +588,7 @@ window.addEventListener('message', e => {
       edits: Array.isArray(msg.edits) ? msg.edits : [],
       sources: Array.isArray(msg.sources) ? msg.sources : []
     });
-    renderMessages(); saveState();
+    renderMessages();
     isSending = false; sendBtn.disabled = false; stopBtn.classList.remove('on');
     return;
   }
@@ -596,56 +600,47 @@ window.addEventListener('message', e => {
       streamEl.classList.remove('streaming');
       streamEl.innerHTML = renderMarkdown(streamRaw) + '<div class="sources"><div class="sources-title">Stopped</div></div>';
       state.messages.push({ role: 'assistant', content: streamRaw + '\n\n*(stopped)*' });
-      saveState();
     }
     streamEl = null; streamRaw = '';
     isSending = false; sendBtn.disabled = false; stopBtn.classList.remove('on');
     return;
   }
 
-  if (msg.type === 'reply') {
-    const th = document.getElementById('thinking');
-    if (th) th.remove();
-    state.messages.push({
-      role: 'assistant',
-      content: msg.reply || 'No response.',
-      edits: Array.isArray(msg.edits) ? msg.edits : [],
-      sources: Array.isArray(msg.sources) ? msg.sources : []
-    });
-    renderMessages(); saveState();
-    isSending = false; sendBtn.disabled = false; stopBtn.classList.remove('on');
-  } else if (msg.type === 'error') {
+  if (msg.type === 'error') {
     const th = document.getElementById('thinking');
     if (th) th.remove();
     state.messages.push({ role: 'assistant', content: '**Error:** ' + (msg.message || 'Unknown error') });
-    renderMessages(); saveState();
+    renderMessages();
     isSending = false; sendBtn.disabled = false; stopBtn.classList.remove('on');
-  } else if (msg.type === 'clear') {
-    state.messages = []; renderMessages(); saveState();
-  } else if (msg.type === 'fileList') {
-    fileList = msg.files || [];
-    checkAutocomplete();
-  } else if (msg.type === 'selectionInfo') {
+    return;
+  }
+
+  if (msg.type === 'fileList') { fileList = msg.files || []; checkAutocomplete(); return; }
+
+  if (msg.type === 'selectionInfo') {
     if (msg.selection) {
       state.pendingSelection = msg.selection;
-      saveState(); renderChips();
+      renderChips();
       inEl.value = inEl.value.replace(/#[^\s]*$/, '');
       closeAc();
-    } else {
-      closeAc();
-    }
-  } else if (msg.type === 'insertPrompt') {
+    } else { closeAc(); }
+    return;
+  }
+
+  if (msg.type === 'insertPrompt') {
     inEl.value = msg.prompt || '';
     inEl.focus();
     inEl.style.height = '44px';
     inEl.style.height = Math.min(inEl.scrollHeight, 160) + 'px';
     if (msg.autoSend) send(inEl.value);
+    return;
   }
 });
 
 renderChips();
 renderMessages();
 inEl.focus();
+vscode.postMessage({ type: 'ready' });
 </script>
 </body>
 </html>

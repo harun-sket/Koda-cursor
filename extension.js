@@ -225,12 +225,100 @@ async function showDiffPreview(originalPath, newContent, title) {
   await vscode.commands.executeCommand('vscode.diff', originalUri, modifiedUri, title || 'KODA: ' + originalPath);
 }
 
+function makeTitle(text) {
+  const t = String(text || '').trim().replace(/\s+/g, ' ');
+  return t.length > 42 ? t.slice(0, 42) + '\u2026' : (t || 'New Chat');
+}
+
 class KodaChatView {
-  constructor(extensionUri) {
+  constructor(extensionUri, context) {
     this.extensionUri = extensionUri;
+    this.context = context;
     this.view = null;
-    this.history = [];
+    this.conversations = [];
+    this.currentConvId = null;
     this.currentAbort = null;
+    this._load();
+  }
+
+  _load() {
+    try {
+      const saved = this.context.workspaceState.get('koda.conversations', []);
+      this.conversations = Array.isArray(saved) ? saved : [];
+      this.currentConvId = this.context.workspaceState.get('koda.currentConvId', null);
+    } catch (_) {
+      this.conversations = [];
+      this.currentConvId = null;
+    }
+    if (!this.currentConvId || !this.conversations.find(c => c.id === this.currentConvId)) {
+      this._newConversation(false);
+    }
+  }
+
+  _save() {
+    try {
+      this.context.workspaceState.update('koda.conversations', this.conversations);
+      this.context.workspaceState.update('koda.currentConvId', this.currentConvId);
+    } catch (_) {}
+  }
+
+  _newConversation(notify) {
+    const id = 'c-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8);
+    const conv = { id, title: 'New Chat', messages: [], createdAt: Date.now(), updatedAt: Date.now() };
+    this.conversations.unshift(conv);
+    this.currentConvId = id;
+    this._save();
+    if (notify && this.view) {
+      this._pushList();
+      this.view.webview.postMessage({ type: 'loadConversation', id, messages: [] });
+    }
+    return conv;
+  }
+
+  currentConv() {
+    return this.conversations.find(c => c.id === this.currentConvId) || null;
+  }
+
+  _pushList() {
+    if (!this.view) return;
+    this.view.webview.postMessage({
+      type: 'conversationsList',
+      conversations: this.conversations.map(c => ({ id: c.id, title: c.title, updatedAt: c.updatedAt })),
+      currentId: this.currentConvId
+    });
+  }
+
+  newChat() { this._newConversation(true); }
+
+  selectConversation(id) {
+    const c = this.conversations.find(c => c.id === id);
+    if (!c) return;
+    this.currentConvId = id;
+    this._save();
+    if (this.view) {
+      this.view.webview.postMessage({ type: 'loadConversation', id, messages: c.messages || [] });
+      this._pushList();
+    }
+  }
+
+  deleteConversation(id) {
+    this.conversations = this.conversations.filter(c => c.id !== id);
+    if (!this.conversations.length) {
+      this._newConversation(false);
+    } else if (this.currentConvId === id) {
+      this.currentConvId = this.conversations[0].id;
+    }
+    this._save();
+    if (this.view) {
+      this.view.webview.postMessage({ type: 'loadConversation', id: this.currentConvId, messages: this.currentConv().messages || [] });
+      this._pushList();
+    }
+  }
+
+  clearCurrent() {
+    const c = this.currentConv();
+    if (c) { c.messages = []; c.updatedAt = Date.now(); this._save(); }
+    if (this.view) this.view.webview.postMessage({ type: 'loadConversation', id: this.currentConvId, messages: [] });
   }
 
   resolveWebviewView(webviewView) {
@@ -256,10 +344,22 @@ class KodaChatView {
 
     webviewView.webview.onDidReceiveMessage(async msg => {
       if (!msg || !msg.type) return;
-      if (msg.type === 'ask') {
+      if (msg.type === 'ready') {
+        const conv = this.currentConv();
+        webviewView.webview.postMessage({ type: 'loadConversation', id: this.currentConvId, messages: (conv && conv.messages) || [] });
+        this._pushList();
+      } else if (msg.type === 'ask') {
         await this.handleAsk(msg);
       } else if (msg.type === 'stop') {
         if (this.currentAbort) { try { this.currentAbort.abort(); } catch (_) {} }
+      } else if (msg.type === 'newChat') {
+        this.newChat();
+      } else if (msg.type === 'selectConversation') {
+        this.selectConversation(msg.id);
+      } else if (msg.type === 'deleteConversation') {
+        this.deleteConversation(msg.id);
+      } else if (msg.type === 'clearCurrent') {
+        this.clearCurrent();
       } else if (msg.type === 'applyEdit') {
         await this.handleApply(msg);
       } else if (msg.type === 'applyAll') {
@@ -292,14 +392,22 @@ class KodaChatView {
   async handleAsk(msg) {
     const view = this.view;
     if (!view) return;
+    const conv = this.currentConv();
+    if (!conv) return;
     const { workerUrl } = getConfig();
-    if (!workerUrl) {
-      return view.webview.postMessage({ type: 'error', message: 'Set koda.workerUrl in settings.' });
-    }
+    if (!workerUrl) return view.webview.postMessage({ type: 'error', message: 'Set koda.workerUrl in settings.' });
 
     try {
       const ctx = await gatherContext({ mentions: msg.mentions || [], includeOpenFiles: true });
       const expanded = expandSlash(msg.message, ctx);
+
+      conv.messages.push({ role: 'user', content: msg.message });
+      if (conv.messages.filter(m => m.role === 'user').length === 1) {
+        conv.title = makeTitle(msg.message);
+      }
+      conv.updatedAt = Date.now();
+      this._save();
+      this._pushList();
 
       this.currentAbort = new AbortController();
 
@@ -308,7 +416,7 @@ class KodaChatView {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           message: expanded,
-          history: this.history.slice(-12),
+          history: conv.messages.slice(-12),
           webSearch: !!msg.webSearch,
           stream: true,
           mode: 'agent',
@@ -341,7 +449,6 @@ class KodaChatView {
         buffer += dec.decode(value, { stream: true });
         const lines = buffer.split('\n');
         buffer = lines.pop();
-
         for (const line of lines) {
           if (!line.startsWith('data: ')) continue;
           const payload = line.slice(6).trim();
@@ -367,14 +474,13 @@ class KodaChatView {
           }
         }
       }
-      if (pendingChunk) {
-        view.webview.postMessage({ type: 'chunk', delta: pendingChunk });
-      }
+      if (pendingChunk) view.webview.postMessage({ type: 'chunk', delta: pendingChunk });
 
       const edits = parseEdits(fullText);
-      this.history.push({ role: 'user', content: msg.message });
-      this.history.push({ role: 'assistant', content: fullText });
-      if (this.history.length > 24) this.history = this.history.slice(-24);
+      conv.messages.push({ role: 'assistant', content: fullText, edits, sources });
+      conv.updatedAt = Date.now();
+      this._save();
+      this._pushList();
 
       view.webview.postMessage({ type: 'done', reply: fullText, edits, sources });
     } catch (e) {
@@ -397,12 +503,27 @@ class KodaChatView {
     }
   }
 
-  clear() {
-    this.history = [];
-    if (this.view) this.view.webview.postMessage({ type: 'clear' });
-  }
-
+  clear() { this.clearCurrent(); }
   postMessage(m) { if (this.view) this.view.webview.postMessage(m); }
+}
+
+class KodaCodeActionProvider {
+  provideCodeActions(document, range) {
+    if (range.isEmpty) return [];
+    const items = [
+      { title: 'KODA: Explain this', cmd: 'explain' },
+      { title: 'KODA: Fix bugs here', cmd: 'fix' },
+      { title: 'KODA: Write tests', cmd: 'test' },
+      { title: 'KODA: Add docs', cmd: 'doc' },
+      { title: 'KODA: Refactor this', cmd: 'refactor' },
+      { title: 'KODA: Optimize this', cmd: 'optimize' }
+    ];
+    return items.map(it => {
+      const action = new vscode.CodeAction(it.title, vscode.CodeActionKind.Refactor);
+      action.command = { command: 'koda.runAction', title: it.title, arguments: [it.cmd] };
+      return action;
+    });
+  }
 }
 
 async function inlineEdit() {
@@ -467,11 +588,18 @@ async function inlineEdit() {
 function activate(context) {
   diffProvider = new KodaDiffProvider();
   context.subscriptions.push(vscode.workspace.registerTextDocumentContentProvider('koda-diff', diffProvider));
-  const chat = new KodaChatView(context.extensionUri);
-  context.subscriptions.push(vscode.window.registerWebviewViewProvider('koda.chatView', chat, { webviewOptions: { retainContextWhenHidden: true } }));
+
+  const chat = new KodaChatView(context.extensionUri, context);
+
+  context.subscriptions.push(
+    vscode.window.registerWebviewViewProvider('koda.chatView', chat, { webviewOptions: { retainContextWhenHidden: true } })
+  );
+
   context.subscriptions.push(vscode.commands.registerCommand('koda.openChat', () => vscode.commands.executeCommand('koda.chatView.focus')));
+  context.subscriptions.push(vscode.commands.registerCommand('koda.newChat', () => { vscode.commands.executeCommand('koda.chatView.focus'); chat.newChat(); }));
   context.subscriptions.push(vscode.commands.registerCommand('koda.clearChat', () => chat.clear()));
   context.subscriptions.push(vscode.commands.registerCommand('koda.inlineEdit', inlineEdit));
+
   context.subscriptions.push(vscode.commands.registerCommand('koda.explainSelection', async () => {
     const editor = vscode.window.activeTextEditor;
     if (!editor || editor.selection.isEmpty) return vscode.window.showWarningMessage('Select code first.');
@@ -481,6 +609,27 @@ function activate(context) {
     await vscode.commands.executeCommand('koda.chatView.focus');
     chat.postMessage({ type: 'insertPrompt', prompt, autoSend: true });
   }));
+
+  context.subscriptions.push(vscode.commands.registerCommand('koda.runAction', async (cmd) => {
+    const editor = vscode.window.activeTextEditor;
+    if (!editor) return;
+    const sel = editor.selection;
+    const selText = sel.isEmpty ? editor.document.getText().slice(0, 4000) : editor.document.getText(sel);
+    const lang = editor.document.languageId;
+    const filePath = relPath(editor.document.uri.fsPath);
+    const body = 'File: `' + filePath + '`\n\n```' + lang + '\n' + selText + '\n```';
+    const message = '/' + cmd + ' ' + body;
+    await vscode.commands.executeCommand('koda.chatView.focus');
+    chat.postMessage({ type: 'insertPrompt', prompt: message, autoSend: true });
+  }));
+
+  context.subscriptions.push(
+    vscode.languages.registerCodeActionsProvider(
+      { scheme: 'file' },
+      new KodaCodeActionProvider(),
+      { providedCodeActionKinds: [vscode.CodeActionKind.Refactor] }
+    )
+  );
 }
 
 function deactivate() {}
