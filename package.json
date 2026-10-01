@@ -2,7 +2,7 @@
   "name": "koda-cursor",
   "displayName": "KODA — AI Code Editor",
   "description": "Cursor-style AI coding inside VS Code. By Harun / HYNAWEB.",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "publisher": "hynaweb",
   "engines": { "vscode": "^1.85.0" },
   "categories": ["Programming Languages", "Other", "Education"],

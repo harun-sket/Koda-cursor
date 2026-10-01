@@ -401,6 +401,11 @@ class KodaChatView {
       const ctx = await gatherContext({ mentions: msg.mentions || [], includeOpenFiles: true });
       const expanded = expandSlash(msg.message, ctx);
 
+      const cleanHistory = conv.messages.slice(-12).map(m => ({
+        role: m.role,
+        content: String(m.content || '')
+      }));
+
       conv.messages.push({ role: 'user', content: msg.message });
       if (conv.messages.filter(m => m.role === 'user').length === 1) {
         conv.title = makeTitle(msg.message);
@@ -416,7 +421,7 @@ class KodaChatView {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           message: expanded,
-          history: conv.messages.slice(-12),
+          history: cleanHistory,
           webSearch: !!msg.webSearch,
           stream: true,
           mode: 'agent',
