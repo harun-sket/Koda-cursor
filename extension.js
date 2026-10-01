@@ -1,9 +1,3 @@
-/* ============================================================
- * KODA — AI Code Editor
- * Copyright (c) 2026 HYNAWEB. All rights reserved.
- * Proprietary software. See LICENSE for terms.
- * ============================================================ */
-
 const vscode = require('vscode');
 const path = require('path');
 const fs = require('fs');
@@ -55,7 +49,7 @@ async function gatherContext(opts) {
   opts = opts || {};
   const cfg = getConfig();
   const editor = vscode.window.activeTextEditor;
-  const ctx = { activeFile: null, selection: null, openFiles: [], mentionedFiles: [] };
+  const ctx = { activeFile: null, selection: null, openFiles: [], mentionedFiles: [], problems: null, git: null };
 
   if (editor && !editor.document.isUntitled) {
     const doc = editor.document;
@@ -98,6 +92,45 @@ async function gatherContext(opts) {
 
   if (Array.isArray(opts.mentions) && opts.mentions.length) {
     for (const m of opts.mentions) {
+      if (m === 'problems') {
+        try {
+          const all = vscode.languages.getDiagnostics();
+          const items = [];
+          for (const [uri, diags] of all) {
+            for (const d of diags) {
+              if (items.length >= 50) break;
+              items.push({
+                file: relPath(uri.fsPath),
+                line: d.range.start.line + 1,
+                severity: ['Error', 'Warning', 'Info', 'Hint'][d.severity] || 'Info',
+                message: String(d.message).slice(0, 240)
+              });
+            }
+            if (items.length >= 50) break;
+          }
+          ctx.problems = items;
+        } catch (_) {}
+        continue;
+      }
+      if (m === 'git') {
+        try {
+          const gitExt = vscode.extensions.getExtension('vscode.git');
+          if (gitExt) {
+            const git = gitExt.exports.getAPI(1);
+            if (git && git.repositories && git.repositories.length) {
+              const repo = git.repositories[0];
+              ctx.git = {
+                branch: (repo.state.HEAD && repo.state.HEAD.name) || 'unknown',
+                changes: (repo.state.workingTreeChanges || []).slice(0, 30).map(c => ({
+                  file: relPath(c.uri.fsPath),
+                  status: String(c.status)
+                }))
+              };
+            }
+          }
+        } catch (_) {}
+        continue;
+      }
       try {
         const uri = vscode.Uri.file(absPath(m));
         const doc = await vscode.workspace.openTextDocument(uri);
@@ -110,6 +143,37 @@ async function gatherContext(opts) {
     }
   }
   return ctx;
+}
+
+function expandSlash(message, ctx) {
+  const trimmed = String(message || '').trim();
+  const m = trimmed.match(/^\/(\w+)\s*([\s\S]*)$/);
+  if (!m) return message;
+  const cmd = m[1].toLowerCase();
+  const rest = m[2].trim();
+
+  const fileCtx = ctx.selection
+    ? '\n\nSelected code (' + ctx.selection.path + '):\n```' + (ctx.selection.language || '') + '\n' + ctx.selection.text + '\n```'
+    : (ctx.activeFile
+        ? '\n\nCurrent file (' + ctx.activeFile.path + '):\n```' + (ctx.activeFile.language || '') + '\n' + ctx.activeFile.content.slice(0, 8000) + '\n```'
+        : '');
+
+  switch (cmd) {
+    case 'explain':
+      return 'Explain this code step by step using your 4-step method (Problem -> Cause -> Solution -> Practice).' + fileCtx + (rest ? '\n\nFocus: ' + rest : '');
+    case 'fix':
+      return 'Find and fix bugs in this code. Explain what is wrong and why.' + fileCtx + '\n\nBug description: ' + (rest || 'Help me identify the issues.');
+    case 'test':
+      return 'Write unit tests for this code using the standard testing framework for the language.' + fileCtx + '\n\nSpecific request: ' + (rest || 'Cover the main paths and edge cases.');
+    case 'doc':
+      return 'Add documentation to this code. Use JSDoc, docstrings, or inline comments as appropriate.' + fileCtx + (rest ? '\n\nNotes: ' + rest : '');
+    case 'refactor':
+      return 'Refactor this code for readability and maintainability without changing behavior.' + fileCtx + '\n\nGoals: ' + (rest || 'improve clarity');
+    case 'optimize':
+      return 'Optimize this code for performance. Explain the trade-offs.' + fileCtx + '\n\nTarget: ' + (rest || 'general performance');
+    default:
+      return message;
+  }
 }
 
 function parseEdits(text) {
@@ -166,6 +230,7 @@ class KodaChatView {
     this.extensionUri = extensionUri;
     this.view = null;
     this.history = [];
+    this.currentAbort = null;
   }
 
   resolveWebviewView(webviewView) {
@@ -191,9 +256,13 @@ class KodaChatView {
 
     webviewView.webview.onDidReceiveMessage(async msg => {
       if (!msg || !msg.type) return;
-      if (msg.type === 'ask') await this.handleAsk(msg);
-      else if (msg.type === 'applyEdit') await this.handleApply(msg);
-      else if (msg.type === 'applyAll') {
+      if (msg.type === 'ask') {
+        await this.handleAsk(msg);
+      } else if (msg.type === 'stop') {
+        if (this.currentAbort) { try { this.currentAbort.abort(); } catch (_) {} }
+      } else if (msg.type === 'applyEdit') {
+        await this.handleApply(msg);
+      } else if (msg.type === 'applyAll') {
         for (const e of msg.edits || []) await this.handleApply({ edit: e, silent: true });
         vscode.window.showInformationMessage('KODA: applied ' + (msg.edits || []).length + ' file(s).');
       } else if (msg.type === 'openDiff') {
@@ -223,24 +292,99 @@ class KodaChatView {
   async handleAsk(msg) {
     const view = this.view;
     if (!view) return;
+    const { workerUrl } = getConfig();
+    if (!workerUrl) {
+      return view.webview.postMessage({ type: 'error', message: 'Set koda.workerUrl in settings.' });
+    }
+
     try {
       const ctx = await gatherContext({ mentions: msg.mentions || [], includeOpenFiles: true });
-      const payload = {
-        message: msg.message,
-        history: this.history.slice(-12),
-        webSearch: !!msg.webSearch,
-        mode: 'agent',
-        context: ctx
-      };
-      const data = await callWorker(payload);
-      const reply = data.reply || 'No reply.';
-      const edits = parseEdits(reply);
+      const expanded = expandSlash(msg.message, ctx);
+
+      this.currentAbort = new AbortController();
+
+      const res = await fetch(workerUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          message: expanded,
+          history: this.history.slice(-12),
+          webSearch: !!msg.webSearch,
+          stream: true,
+          mode: 'agent',
+          context: ctx
+        }),
+        signal: this.currentAbort.signal
+      });
+
+      if (!res.ok) {
+        let detail = 'Worker returned ' + res.status;
+        try {
+          const err = await res.json();
+          if (err.error) detail = err.error;
+          if (err.detail) detail += ' - ' + String(err.detail).slice(0, 200);
+        } catch (_) {}
+        throw new Error(detail);
+      }
+
+      const reader = res.body.getReader();
+      const dec = new TextDecoder();
+      let buffer = '';
+      let fullText = '';
+      let sources = [];
+      let pendingChunk = '';
+      let lastFlush = 0;
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += dec.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop();
+
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue;
+          const payload = line.slice(6).trim();
+          if (payload === '[DONE]') continue;
+          try {
+            const j = JSON.parse(payload);
+            if (j.delta) {
+              fullText += j.delta;
+              pendingChunk += j.delta;
+              const now = Date.now();
+              if (now - lastFlush > 40) {
+                view.webview.postMessage({ type: 'chunk', delta: pendingChunk });
+                pendingChunk = '';
+                lastFlush = now;
+              }
+            } else if (j.sources) {
+              sources = j.sources;
+            } else if (j.error) {
+              throw new Error(j.error);
+            }
+          } catch (e) {
+            if (e.message && e.message.indexOf('Unexpected') !== 0) throw e;
+          }
+        }
+      }
+      if (pendingChunk) {
+        view.webview.postMessage({ type: 'chunk', delta: pendingChunk });
+      }
+
+      const edits = parseEdits(fullText);
       this.history.push({ role: 'user', content: msg.message });
-      this.history.push({ role: 'assistant', content: reply });
+      this.history.push({ role: 'assistant', content: fullText });
       if (this.history.length > 24) this.history = this.history.slice(-24);
-      view.webview.postMessage({ type: 'reply', reply, edits, sources: data.sources || [] });
+
+      view.webview.postMessage({ type: 'done', reply: fullText, edits, sources });
     } catch (e) {
-      view.webview.postMessage({ type: 'error', message: e.message });
+      if (e.name === 'AbortError') {
+        view.webview.postMessage({ type: 'aborted' });
+      } else {
+        view.webview.postMessage({ type: 'error', message: e.message });
+      }
+    } finally {
+      this.currentAbort = null;
     }
   }
 
