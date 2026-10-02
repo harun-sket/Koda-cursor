@@ -7,9 +7,27 @@ function getConfig() {
   const cfg = vscode.workspace.getConfiguration('koda');
   return {
     workerUrl: String(cfg.get('workerUrl') || '').replace(/\/+$/, ''),
+    model: String(cfg.get('model') || 'auto'),
+    temperature: Number(cfg.get('temperature') !== undefined ? cfg.get('temperature') : 0.6),
     autoApply: !!cfg.get('autoApply'),
     maxContextFiles: Number(cfg.get('maxContextFiles') || 6),
-    webSearchByDefault: !!cfg.get('webSearchByDefault')
+    webSearchByDefault: !!cfg.get('webSearchByDefault'),
+    showSources: cfg.get('showSources') !== false,
+    confirmDelete: cfg.get('confirmDelete') !== false
+  };
+}
+
+function getPublicConfig() {
+  const c = getConfig();
+  return {
+    model: c.model,
+    temperature: c.temperature,
+    autoApply: c.autoApply,
+    maxContextFiles: c.maxContextFiles,
+    webSearchByDefault: c.webSearchByDefault,
+    showSources: c.showSources,
+    confirmDelete: c.confirmDelete,
+    workerUrl: c.workerUrl
   };
 }
 
@@ -288,6 +306,11 @@ class KodaChatView {
     });
   }
 
+  pushConfig() {
+    if (!this.view) return;
+    this.view.webview.postMessage({ type: 'config', config: getPublicConfig() });
+  }
+
   newChat() { this._newConversation(true); }
 
   selectConversation(id) {
@@ -339,7 +362,8 @@ class KodaChatView {
     html = html
       .replace(/\{\{CSP\}\}/g, csp)
       .replace(/\{\{NONCE\}\}/g, nonce)
-      .replace(/\{\{WEBSEARCH_DEFAULT\}\}/g, cfg.webSearchByDefault ? 'true' : 'false');
+      .replace(/\{\{WEBSEARCH_DEFAULT\}\}/g, cfg.webSearchByDefault ? 'true' : 'false')
+      .replace(/\{\{CONFIG_JSON\}\}/g, JSON.stringify(getPublicConfig()).replace(/</g, '\\u003c'));
     webviewView.webview.html = html;
 
     webviewView.webview.onDidReceiveMessage(async msg => {
@@ -348,6 +372,7 @@ class KodaChatView {
         const conv = this.currentConv();
         webviewView.webview.postMessage({ type: 'loadConversation', id: this.currentConvId, messages: (conv && conv.messages) || [] });
         this._pushList();
+        this.pushConfig();
       } else if (msg.type === 'ask') {
         await this.handleAsk(msg);
       } else if (msg.type === 'stop') {
@@ -385,7 +410,25 @@ class KodaChatView {
             text: editor.document.getText(editor.selection)
           }
         });
+      } else if (msg.type === 'updateSetting') {
+        try {
+          await vscode.workspace.getConfiguration('koda').update(msg.key, msg.value, vscode.ConfigurationTarget.Global);
+        } catch (e) {
+          vscode.window.showErrorMessage('KODA: failed to save setting - ' + e.message);
+        }
+      } else if (msg.type === 'resetSettings') {
+        const cfgUpdate = vscode.workspace.getConfiguration('koda');
+        const keys = ['model', 'temperature', 'autoApply', 'webSearchByDefault', 'showSources', 'confirmDelete', 'maxContextFiles'];
+        for (const k of keys) {
+          try { await cfgUpdate.update(k, undefined, vscode.ConfigurationTarget.Global); } catch (_) {}
+        }
+        this.pushConfig();
       }
+    });
+
+    if (configChangeDisposable) configChangeDisposable.dispose();
+    configChangeDisposable = vscode.workspace.onDidChangeConfiguration(e => {
+      if (e.affectsConfiguration('koda')) this.pushConfig();
     });
   }
 
@@ -394,7 +437,8 @@ class KodaChatView {
     if (!view) return;
     const conv = this.currentConv();
     if (!conv) return;
-    const { workerUrl } = getConfig();
+    const cfg = getConfig();
+    const workerUrl = cfg.workerUrl;
     if (!workerUrl) return view.webview.postMessage({ type: 'error', message: 'Set koda.workerUrl in settings.' });
 
     try {
@@ -425,6 +469,8 @@ class KodaChatView {
           webSearch: !!msg.webSearch,
           stream: true,
           mode: 'agent',
+          model: cfg.model,
+          temperature: cfg.temperature,
           context: ctx
         }),
         signal: this.currentAbort.signal
@@ -548,6 +594,7 @@ async function inlineEdit() {
 
   const filePath = relPath(doc.uri.fsPath);
   const fileContent = doc.getText();
+  const cfg = getConfig();
   const message = hasSelection
     ? 'Edit this selected code from ' + filePath + '. Return ONLY the modified version of the selection, wrapped in a single fenced code block with path=' + filePath + '.\n\nINSTRUCTION: ' + instruction + '\n\nSELECTED:\n```' + doc.languageId + '\n' + selectedText + '\n```'
     : 'Edit this file ' + filePath + '. Return the FULL new file content in a single fenced code block with path=' + filePath + '.\n\nINSTRUCTION: ' + instruction + '\n\nFILE:\n```' + doc.languageId + '\n' + fileContent + '\n```';
@@ -557,7 +604,12 @@ async function inlineEdit() {
     async () => {
       try {
         const data = await callWorker({
-          message, history: [], webSearch: false, mode: 'agent',
+          message,
+          history: [],
+          webSearch: false,
+          mode: 'agent',
+          model: cfg.model,
+          temperature: cfg.temperature,
           context: {
             activeFile: { path: filePath, language: doc.languageId, content: fileContent.slice(0, 20000) },
             selection: hasSelection ? { path: filePath, text: selectedText } : null
@@ -589,6 +641,8 @@ async function inlineEdit() {
     }
   );
 }
+
+let configChangeDisposable = null;
 
 function activate(context) {
   diffProvider = new KodaDiffProvider();

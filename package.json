@@ -2,7 +2,7 @@
   "name": "koda-cursor",
   "displayName": "KODA — AI Code Editor",
   "description": "Cursor-style AI coding inside VS Code. By Harun / HYNAWEB.",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "publisher": "hynaweb",
   "engines": { "vscode": "^1.85.0" },
   "categories": ["Programming Languages", "Other", "Education"],
@@ -47,9 +47,52 @@
           "default": "https://koda-api-proxy.harun9842245.workers.dev",
           "description": "KODA Cloudflare Worker URL (no trailing slash)."
         },
-        "koda.autoApply": { "type": "boolean", "default": false, "description": "Auto-apply edits from chat." },
-        "koda.maxContextFiles": { "type": "number", "default": 6, "description": "How many open files to attach as context." },
-        "koda.webSearchByDefault": { "type": "boolean", "default": false, "description": "Enable web search on every chat message." }
+        "koda.model": {
+          "type": "string",
+          "enum": ["auto", "smart", "fast", "code-master"],
+          "enumDescriptions": [
+            "Auto — uses gpt-oss-120b, falls back to gpt-oss-20b or qwen3-32b on failure",
+            "Smart — always uses gpt-oss-120b, falls back to gpt-oss-20b",
+            "Fast — uses gpt-oss-20b, falls back to qwen3-32b (higher free-tier rate limit)",
+            "Code Master — DeepSeek R1 Distill Qwen 32B for reasoning, debugging, and code review"
+          ],
+          "default": "auto",
+          "description": "Which model to use for chat replies."
+        },
+        "koda.temperature": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "default": 0.6,
+          "description": "Response creativity. Lower is more focused, higher is more varied."
+        },
+        "koda.autoApply": {
+          "type": "boolean",
+          "default": false,
+          "description": "Auto-apply edits from chat without a diff confirmation."
+        },
+        "koda.webSearchByDefault": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable web search on every chat message."
+        },
+        "koda.showSources": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show the sources panel under replies when web search is active."
+        },
+        "koda.confirmDelete": {
+          "type": "boolean",
+          "default": true,
+          "description": "Ask for confirmation before deleting a conversation."
+        },
+        "koda.maxContextFiles": {
+          "type": "number",
+          "minimum": 1,
+          "maximum": 20,
+          "default": 6,
+          "description": "How many open files to attach as context."
+        }
       }
     }
   }
